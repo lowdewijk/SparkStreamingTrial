@@ -24,25 +24,25 @@ object HackthonApp extends App {
     .setAppName("HackeDieHack")
     .set("spark.logConf", "true")
     .set("spark.akka.logLifecycleEvents", "true")
-  val ssc = new StreamingContext(conf, Milliseconds(15))
+  val ssc = new StreamingContext(conf, Milliseconds(200))
+  ssc.checkpoint(".")
 
-
-  val stockMarketStream = ssc.receiverStream(new StockMarketReceiver(1500))
+  val stockMarketStream = ssc.receiverStream(new StockMarketReceiver(100))
 
   stockMarketStream
-    .window(Milliseconds(30))
-    .map(x => (x.date, x))
-    .updateStateByKey((quotePairs : Seq[Quote], input : Option[(Int, Seq[Quote])]) => {
-      val (count, quotes) = input.getOrElse((0, Seq()))
-      Some((count+1, quotes ++ quotePairs))
-    })
-
+    //.window(Milliseconds(30))
+    .map(x => (x.date.getYear.toString + x.date.getWeekOfWeekyear.toString, x))
+    .updateStateByKey((quotePairs: Seq[Quote], input: Option[Seq[Quote]]) => {
+    Some(input.getOrElse(Seq()) ++ quotePairs)
+  }).filter { case (key, quotesPerWeek) => quotesPerWeek.size >= 5}
+    .map { case (key, quotesPerWeek) => key -> quotesPerWeek.foldLeft(BigDecimal(0))(_ + _.close) / quotesPerWeek.size}
+    .print()
 
   ssc.start()
 }
 
-case class Quote(date:DateTime, open:BigDecimal, high:BigDecimal, low:BigDecimal,
-                 close:BigDecimal, volume:Long, adjClose:BigDecimal) extends Ordering[Quote] {
+case class Quote(date: DateTime, open: BigDecimal, high: BigDecimal, low: BigDecimal,
+                 close: BigDecimal, volume: Long, adjClose: BigDecimal) extends Ordering[Quote] {
   override def compare(x: Quote, y: Quote): Int = 0
 }
 
@@ -51,18 +51,20 @@ object Quote {
     val List(rawDate, rawOpen, rawHigh, rawLow, rawClose, rawVolume, rawAdjClose) = csvLine.split(",").toList
     val fmt = DateTimeFormat.forPattern("yyyy-MM-dd");
     val dateTime = fmt.parseDateTime(rawDate.toString)
-    new Quote(dateTime, BigDecimal(rawOpen),BigDecimal(rawHigh),BigDecimal(rawLow), BigDecimal(rawClose), rawVolume.toLong,BigDecimal(rawAdjClose))
+    new Quote(dateTime, BigDecimal(rawOpen), BigDecimal(rawHigh), BigDecimal(rawLow), BigDecimal(rawClose), rawVolume.toLong, BigDecimal(rawAdjClose))
   }
 }
 
 
-class StockMarketReceiver(delayMs : Int)
+class StockMarketReceiver(delayMs: Int)
   extends Receiver[Quote](StorageLevel.MEMORY_AND_DISK_2)
   with Logging {
 
   def onStart() {
     new Thread("Socket Receiver") {
-      override def run() { receive() }
+      override def run() {
+        receive()
+      }
     }.start()
   }
 
@@ -75,8 +77,8 @@ class StockMarketReceiver(delayMs : Int)
     Source.fromFile(filePath).getLines()
       .drop(1)
       .foreach { line =>
-        store(Quote(line))
-        Thread.sleep(delayMs)
-      }
+      store(Quote(line))
+      Thread.sleep(delayMs)
+    }
   }
 }

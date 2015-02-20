@@ -8,7 +8,7 @@
 
     <logger name="com.xebia.sst" level="debug" />
 
-    <root level="info">
+    <root level="error">
         <appender-ref ref="STDOUT" />
     </root>
 
