@@ -1,3 +1,5 @@
+package com.xebia.sst
+
 import java.io.{InputStreamReader, BufferedReader}
 import java.util.Random
 
@@ -7,12 +9,12 @@ import org.apache.spark.streaming.dstream.ReceiverInputDStream
 import org.apache.spark.streaming.receiver.ActorHelper
 import org.joda.time.format.DateTimeFormat
 import org.joda.time.{LocalDateTime, DateTime}
-import scala.concurrent.duration._
 import org.apache.spark._
 import org.apache.spark.streaming._
 import org.apache.spark.streaming.StreamingContext._
 import org.apache.spark.streaming.receiver.Receiver
 import scala.io.Source
+import org.apache.spark.streaming.StreamingContext._
 
 
 object HackthonApp extends App {
@@ -22,20 +24,30 @@ object HackthonApp extends App {
     .setAppName("HackeDieHack")
     .set("spark.logConf", "true")
     .set("spark.akka.logLifecycleEvents", "true")
-  val ssc = new StreamingContext(conf, Seconds(5))
+  val ssc = new StreamingContext(conf, Milliseconds(15))
 
 
-  val stockMarketStream = ssc.receiverStream(new StockMarketReceiver(500))
+  val stockMarketStream = ssc.receiverStream(new StockMarketReceiver(1500))
 
-  stockMarketStream.print()
+  stockMarketStream
+    .window(Milliseconds(30))
+    .map(x => (x.date, x))
+    .updateStateByKey((quotePairs : Seq[Quote], input : Option[(Int, Seq[Quote])]) => {
+      val (count, quotes) = input.getOrElse((0, Seq()))
+      Some((count+1, quotes ++ quotePairs))
+    })
+
+
   ssc.start()
-
 }
 
-case class Quote(date:DateTime, open:BigDecimal, high:BigDecimal, low:BigDecimal, close:BigDecimal, volume:Long, adjClose:BigDecimal)
+case class Quote(date:DateTime, open:BigDecimal, high:BigDecimal, low:BigDecimal,
+                 close:BigDecimal, volume:Long, adjClose:BigDecimal) extends Ordering[Quote] {
+  override def compare(x: Quote, y: Quote): Int = 0
+}
 
 object Quote {
-  def apply(csvLine:String): Quote = {
+  def apply(csvLine: String): Quote = {
     val List(rawDate, rawOpen, rawHigh, rawLow, rawClose, rawVolume, rawAdjClose) = csvLine.split(",").toList
     val fmt = DateTimeFormat.forPattern("yyyy-MM-dd");
     val dateTime = fmt.parseDateTime(rawDate.toString)
@@ -58,13 +70,13 @@ class StockMarketReceiver(delayMs : Int)
   }
 
   private def receive(): Unit = {
-    val filePath: String = this.getClass.getResource("nasdaq.csv").getFile
+    val filePath: String = this.getClass.getResource("/nasdaq.csv").getFile
     println(s"PATH================================ $filePath")
     Source.fromFile(filePath).getLines()
       .drop(1)
       .foreach { line =>
-      store(Quote(line))
-      Thread.sleep(delayMs)
-    }
+        store(Quote(line))
+        Thread.sleep(delayMs)
+      }
   }
 }
